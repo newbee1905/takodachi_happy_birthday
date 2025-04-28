@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>Bounce & Celebrate</title>
+	<style>
+		html, body {
+			margin: 0; padding: 0;
+			overflow: hidden;
+			background: #000;
+			font-family: 'Comic Sans MS', cursive, sans-serif;
+		}
+		canvas { display: block; }
+		#replay {
+			position: absolute;
+			bottom: 40px; left: 50%;
+			transform: translateX(-50%);
+			padding: 12px 24px;
+			font-size: 22px;
+			background: #F27D0C; /* Ina Orange */
+			color: #fff;
+			border: none;
+			border-radius: 6px;
+			cursor: pointer;
+			display: none;
+			transition: background-color 0.3s;
+			font-family: 'Comic Sans MS', cursive, sans-serif;
+			z-index: 100;
+		}
+		#replay:hover {
+			background: #ff9933;
+		}
+		#timer {
+			position: absolute;
+			top: 20px;
+			right: 20px;
+			color: #fff;
+			font-size: 24px;
+			opacity: 0.8;
+			font-family: 'Comic Sans MS', cursive, sans-serif;
+		}
+		#bounce-counter {
+			position: absolute;
+			top: 20px;
+			left: 20px;
+			color: #fff;
+			font-size: 24px;
+			opacity: 0.8;
+			font-family: 'Comic Sans MS', cursive, sans-serif;
+		}
+	</style>
+</head>
+<body>
+	<canvas id="game"></canvas>
+	<div id="timer">Time: 30s</div>
+	<div id="bounce-counter">Bounces: 0/5</div>
+	<button id="replay">Play Again</button>
+	<!-- Artist credit footer -->
+	<footer style="
+		position: absolute;
+		bottom: 0;
+		width: 100%;
+		text-align: center;
+		padding: 8px 0;
+		font-size: 14px;
+		color: #aaa;
+		background: rgba(0,0,0,0.5);
+	">
+		Blob art by 
+		<a href="https://www.reddit.com/r/NinomaeInanis/comments/m8vkmo/made_a_takodachi_using_adobe_illustrator/"
+			 target="_blank" rel="noopener noreferrer"
+			 style="color: #7f4fcb; text-decoration: none;">
+			u/kuroboshi on r/NinomaeInanis
+		</a>
+	</footer>
+	<script>
+		const canvas = document.getElementById('game');
+		const ctx = canvas.getContext('2d');
+		const btn = document.getElementById('replay');
+		const timerDisplay = document.getElementById('timer');
+		const bounceCounter = document.getElementById('bounce-counter');
+		let W, H;
+		
+		window.addEventListener('resize', () => {
+			W = canvas.width = window.innerWidth;
+			H = canvas.height = window.innerHeight;
+		});
+		window.dispatchEvent(new Event('resize'));
+
+		// Create a placeholder blob image until the real one loads
+		const img = new Image();
+		img.src = 'blob.webp';
+		img.onerror = () => {
+			// Create a fallback blob if image doesn't load
+			console.log("Image failed to load, using fallback");
+		};
+
+		// Game constants
+		const normalV = { x: 3, y: 4 };		 // Normal velocity
+		const maxV = 25;										// Maximum velocity
+		const size = 180;									 // Blob size
+		const boostDur = 2000;							// Duration of speed boost in ms
+		const explodeDelay = 1500;					// Delay before explosion completion in ms
+		
+		// Color scheme from Ningame ina'nis
+		const colors = {
+			inkBlack: "#000000",			// HEX #000000, CMYK 100 M:100 Y:100 K:100, HSV 0 S:100 B:0
+			ikaPurple: "#4F5068",		// HEX #4F5068, CMYK 75 M:72 Y:30 K:8, HSV 236 S:22 B:40
+			inaOrange: "#F27D0C",		// HEX #F27D0C, CMYK 0 M:50 Y:93 K:0, HSV 32 S:80 B:94
+			inaiPurple: "#D6D2E3"		// HEX #D6D2E3, CMYK 13 M:17 Y:0 K:0, HSV 262 S:9 B:93
+		};
+		const maxTime = 30000;							// Maximum game time (30 seconds)
+		const maxBounces = 5;							 // Maximum wall bounces before explosion
+		
+		// Game variables
+		let vx = normalV.x, vy = normalV.y;
+		let x = 50, y = 50;
+		let rotation = 0;									 // Current rotation angle
+		let bounceCount = 0;								// Count of wall bounces
+		let startTime = null;							 // Game start time
+		let clickedAt = null;							 // When blob was clicked
+		let isExploding = false;						// Whether explosion is in progress
+		let gameOver = false;							 // Whether game is over
+		let targetRotation = 0;						 // Target rotation angle
+
+		// Text to reveal
+		const messages = [
+			"Happy Birthday!",
+			// "Congratulations!",
+			// "You're Amazing!",
+			// "Surprise!"
+		];
+		const selectedMessage = messages[Math.floor(Math.random() * messages.length)];
+
+		class Particle {
+			constructor(px, py, color = null) {
+				this.x = px;
+				this.y = py;
+				const ang = Math.random() * 2 * Math.PI;
+				const spd = Math.random() * 4 + 2;
+				this.vx = Math.cos(ang) * spd;
+				this.vy = Math.sin(ang) * spd;
+				this.alpha = 1;
+				this.size = Math.random() * 6 + 3;
+				this.color = color || `hsl(${Math.random() * 60 + 260}, 80%, 60%)`;
+			}
+			
+			update() {
+				this.x += this.vx;
+				this.y += this.vy;
+				this.vy += 0.05; // Add gravity
+				this.alpha -= 0.015;
+				this.size *= 0.99;
+			}
+			
+			draw() {
+				ctx.globalAlpha = this.alpha;
+				ctx.beginPath();
+				ctx.arc(this.x, this.y, this.size, 0, 2 * Math.PI);
+				ctx.fillStyle = this.color;
+				ctx.fill();
+				ctx.globalAlpha = 1;
+			}
+		}
+
+		const particles = [];
+
+		// Start game
+		function startGame() {
+			x = Math.random() * (W - size);
+			y = Math.random() * (H - size / 2);
+			vx = normalV.x * (Math.random() > 0.5 ? 1 : -1);
+			vy = normalV.y * (Math.random() > 0.5 ? 1 : -1);
+			targetRotation = Math.atan2(vy, vx);
+			rotation = targetRotation;
+			bounceCount = 0;
+			startTime = performance.now();
+			clickedAt = null;
+			isExploding = false;
+			gameOver = false;
+			particles.length = 0;
+			btn.style.display = 'none';
+			canvas.style.display = 'block';
+			timerDisplay.style.display = 'block';
+			bounceCounter.style.display = 'block';
+			updateUI();
+		}
+
+		// End game with explosion
+		function explode() {
+			if (isExploding) return;
+			isExploding = true;
+			clickedAt = performance.now();
+			
+			// Create explosion particles with the color scheme
+			for (let i = 0; i < 50; i++) {
+				particles.push(new Particle(x + size/2, y + size/2, colors.ikaPurple));
+			}
+			for (let i = 0; i < 50; i++) {
+				particles.push(new Particle(x + size/2, y + size/2, colors.inaOrange));
+			}
+			for (let i = 0; i < 50; i++) {
+				particles.push(new Particle(x + size/2, y + size/2, colors.inaiPurple));
+			}
+			
+			// Show UI elements after explosion but don't hide canvas
+			setTimeout(() => {
+				gameOver = true;
+				btn.style.display = 'block';
+				// We keep the canvas visible to show the text
+			}, explodeDelay);
+		}
+
+		// Update timer and bounce counter
+		function updateUI() {
+			if (gameOver || !startTime) return;
+			
+			const currentTime = performance.now();
+			const elapsed = currentTime - startTime;
+			const remaining = Math.max(0, Math.ceil((maxTime - elapsed) / 1000));
+			
+			timerDisplay.textContent = `Time: ${remaining}s`;
+			bounceCounter.textContent = `Bounces: ${bounceCount}/${maxBounces}`;
+		}
+
+		// Handle canvas click
+		canvas.addEventListener('click', (e) => {
+			if (gameOver || isExploding) return;
+			
+			// Check if click is on the blob
+			const dx = e.clientX - (x + size/2);
+			const dy = e.clientY - (y + size/2);
+			const distance = Math.sqrt(dx*dx + dy*dy);
+			
+			if (distance <= size/2) {
+				// Boost velocity
+				vx = Math.sign(vx) * Math.min(Math.abs(vx) * 2.5, maxV);
+				vy = Math.sign(vy) * Math.min(Math.abs(vy) * 2.5, maxV);
+				targetRotation = Math.atan2(vy, vx);
+				
+				// Create particles on click with the color scheme
+				for (let i = 0; i < 8; i++) {
+					particles.push(new Particle(x + size/2, y + size/2, colors.ikaPurple));
+				}
+				for (let i = 0; i < 8; i++) {
+					particles.push(new Particle(x + size/2, y + size/2, colors.inaOrange));
+				}
+				for (let i = 0; i < 8; i++) {
+					particles.push(new Particle(x + size/2, y + size/2, colors.inaiPurple));
+				}
+				
+				// Return to normal velocity after boost duration
+				setTimeout(() => {
+					if (!gameOver && !isExploding) {
+						vx = Math.sign(vx) * normalV.x;
+						vy = Math.sign(vy) * normalV.y;
+						targetRotation = Math.atan2(vy, vx);
+					}
+				}, boostDur);
+			}
+		});
+
+		// Handle replay button click
+		btn.addEventListener('click', startGame);
+
+		// Main game loop
+		function loop(now) {
+			// Clear screen
+			ctx.fillStyle = '#000';
+			ctx.fillRect(0, 0, W, H);
+
+			// Update UI
+			updateUI();
+
+			// Draw hidden text
+			ctx.fillStyle = colors.inaOrange;
+			ctx.font = 'bold 80px "Comic Sans MS", cursive, sans-serif';
+			ctx.textAlign = 'center';
+			ctx.fillText(selectedMessage, W / 2, H / 2 - 40);
+
+			// Check if game should end
+			if (!gameOver && !isExploding && startTime) {
+				const elapsed = now - startTime;
+				if (elapsed >= maxTime || bounceCount >= maxBounces) {
+					explode();
+				}
+			}
+
+			// If exploding, handle explosion
+			if (isExploding) {
+				const explodeProgress = (now - clickedAt) / explodeDelay;
+				
+				// Gradually reveal the text
+				ctx.fillStyle = `rgba(${colors.inaiPurple.substring(1,3)},${colors.inaiPurple.substring(3,5)},${colors.inaiPurple.substring(5,7)},${Math.min(0.95, explodeProgress * 1.5)})`;
+				ctx.fillRect(0, 0, W, H);
+				
+				// Draw message again on top
+				ctx.fillStyle = colors.ikaPurple;
+				ctx.font = 'bold 90px "Comic Sans MS", cursive, sans-serif';
+				ctx.textAlign = 'center';
+				ctx.fillText(selectedMessage, W / 2, H / 2 - 40);
+				
+				// Draw a secondary message
+				ctx.fillStyle = colors.inaOrange;
+				ctx.font = 'bold 40px "Comic Sans MS", cursive, sans-serif';
+				ctx.fillText("Click Play Again to restart!", W / 2, H / 2 + 40);
+			} else {
+				// Normal gameplay - move the blob
+				x += vx;
+				y += vy;
+				
+				// Check wall collisions
+				let bounced = false;
+				if (x < 0) {
+					x = 0;
+					vx = -vx;
+					bounced = true;
+				} else if (x + size > W) {
+					x = W - size;
+					vx = -vx;
+					bounced = true;
+				}
+				
+				if (y < 0) {
+					y = 0;
+					vy = -vy;
+					bounced = true;
+				} else if (y + size > H) {
+					y = H - size;
+					vy = -vy;
+					bounced = true;
+				}
+				
+				// Update bounce count and rotation
+				if (bounced) {
+					bounceCount++;
+					targetRotation = Math.atan2(vy, vx);
+					updateUI();
+					
+					// Create bounce particles with the color scheme
+					for (let i = 0; i < 4; i++) {
+						particles.push(new Particle(x + size/2, y + size/2, colors.ikaPurple));
+					}
+					for (let i = 0; i < 4; i++) {
+						particles.push(new Particle(x + size/2, y + size/2, colors.inaOrange));
+					}
+					for (let i = 0; i < 4; i++) {
+						particles.push(new Particle(x + size/2, y + size/2, colors.inaiPurple));
+					}
+				}
+
+				// Smooth rotation towards target
+				const rotDiff = targetRotation - rotation;
+				rotation += rotDiff * 0.1;
+
+				// Create mask to reveal text
+				ctx.save();
+				ctx.fillStyle = 'rgba(0,0,0,0.9)';
+				ctx.fillRect(0, 0, W, H);
+				ctx.globalCompositeOperation = 'destination-out';
+				ctx.beginPath();
+				ctx.arc(x + size/2, y + size/2, size/1.5, 0, 2 * Math.PI);
+				ctx.fill();
+				ctx.restore();
+
+				// Draw glow effect
+				const grad = ctx.createRadialGradient(
+					x + size/2, y + size/2, size/4,
+					x + size/2, y + size/2, size
+				);
+				// Use the Ika Purple and Inai Purple colors for the gradient
+				grad.addColorStop(0, 'rgba(79,80,104,0.2)'); // Ika Purple with alpha
+				grad.addColorStop(0.6, 'rgba(214,210,227,0.1)'); // Inai Purple with alpha
+				grad.addColorStop(1, 'rgba(0,0,0,0)');
+				ctx.fillStyle = grad;
+				ctx.beginPath();
+				ctx.arc(x + size/2, y + size/2, size, 0, 2 * Math.PI);
+				ctx.fill();
+
+				// Draw blob with proper rotation
+				ctx.save();
+				ctx.translate(x + size/2, y + size/2);
+				ctx.rotate(rotation);
+				
+				// Draw the blob image or a fallback
+				if (img.complete && img.naturalWidth !== 0) {
+					ctx.drawImage(img, -size/2, -size/2, size, size);
+				} else {
+					// Fallback blob drawing using Ika Purple
+					ctx.fillStyle = colors.ikaPurple;
+					ctx.beginPath();
+					ctx.ellipse(0, 0, size/2, size/2.5, 0, 0, 2 * Math.PI);
+					ctx.fill();
+					
+					// Draw eyes
+					ctx.fillStyle = 'white';
+					ctx.beginPath();
+					ctx.ellipse(-size/6, -size/8, size/10, size/8, 0, 0, 2 * Math.PI);
+					ctx.ellipse(size/6, -size/8, size/10, size/8, 0, 0, 2 * Math.PI);
+					ctx.fill();
+					
+					// Draw pupils
+					ctx.fillStyle = 'black';
+					ctx.beginPath();
+					ctx.ellipse(-size/6, -size/8, size/20, size/16, 0, 0, 2 * Math.PI);
+					ctx.ellipse(size/6, -size/8, size/20, size/16, 0, 0, 2 * Math.PI);
+					ctx.fill();
+				}
+				ctx.restore();
+			}
+
+			// Update and draw particles
+			for (let i = particles.length - 1; i >= 0; i--) {
+				particles[i].update();
+				particles[i].draw();
+				if (particles[i].alpha <= 0) {
+					particles.splice(i, 1);
+				}
+			}
+
+			requestAnimationFrame(loop);
+		}
+
+		// Start the game when page loads
+		window.onload = startGame;
+		
+		// Fallback in case image is still loading
+		if (img.complete) {
+			requestAnimationFrame(loop);
+		} else {
+			img.onload = () => requestAnimationFrame(loop);
+			// Start anyway after a short delay if image doesn't load
+			setTimeout(() => {
+				if (!startTime) requestAnimationFrame(loop);
+			}, 500);
+		}
+	</script>
+</body>
+</html>
+
